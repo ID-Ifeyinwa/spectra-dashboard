@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SPECTRA - Chamber 2 Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
+<link rel="stylesheet" href="/src/style.css">
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <span class="brand-title">SPECTRA</span>
+    <span class="brand-sub">// Chamber 2 (70L) Telemetry & ML Predictions</span>
+  </div>
+  <div class="hdr-r">
+    <div class="pill"><div class="dot wait" id="dot"></div><span id="stxt">OFFLINE</span></div>
+    <div id="clk">--:--:--</div>
+  </div>
+</header>
+
+<!-- Connection Panel -->
+<div class="cfg">
+  <label>PROJECT ID</label>
+  <input class="lg" id="pid" value="idigest-495418" placeholder="idigest-495418" />
+  <label>API KEY</label>
+  <input class="md" id="akey" value="AIzaSyCClszs8CWt3RuAaco0Qu7zMjfopz-UtAM" placeholder="AIzaSy..." />
+  <button class="btn" onclick="init()">CONNECT</button>
+</div>
+
+<div class="errbar" id="err"></div>
+
+<!-- Dedicated Batch Run Recorder Bar (New Row) -->
+<div class="batch-bar">
+  <div class="batch-bar-left">
+    <span class="batch-badge">BATCH LOGGER</span>
+    <input type="text" id="batch-input" class="batch-text-input" placeholder="Enter Batch or Run ID (e.g. Batch2323, CompositionX)" />
+    <button class="btn-batch btn-start" id="batch-start" onclick="startBatch()">START RECORDING</button>
+    <button class="btn-batch btn-end" id="batch-end" onclick="endBatch()" disabled>END & SAVE</button>
+  </div>
+  <div class="batch-status-msg" id="batch-status-msg">Ready for new run</div>
+</div>
+
+<!-- Control Scroller & Filters -->
+<div class="scroller-bar">
+  <span class="scroller-lbl">WINDOW</span>
+  <input type="range" id="win-slider" min="5" max="200" value="50" step="5" oninput="onSlider(this.value)" />
+  <span class="scroller-val" id="win-val">50 samples</span>
+  
+  <span class="scroller-lbl" style="margin-left:16px">OFFSET</span>
+  <input type="range" id="off-slider" min="0" max="0" value="0" step="1" oninput="onOffset(this.value)" />
+  <span class="scroller-val" id="off-val">latest</span>
+  <button class="btn-sm" onclick="snapLatest()">LATEST</button>
+
+  <!-- Date Range Filter -->
+  <span class="scroller-lbl" style="margin-left:20px; color:var(--purple-bright)">START TIME</span>
+  <input type="datetime-local" id="filter-start" class="date-input" onchange="onTimeFilterChange()" />
+  <span class="scroller-lbl" style="color:var(--purple-bright)">END TIME</span>
+  <input type="datetime-local" id="filter-end" class="date-input" onchange="onTimeFilterChange()" />
+  <button class="btn-sm" onclick="clearTimeFilter()">CLEAR TIME</button>
+
+  <span class="scroller-lbl" style="margin-left:20px; color:var(--cyan-bright)">Y MIN</span>
+  <input type="range" id="y-min-sl" min="0" max="32000" value="0" step="50" oninput="onYSlider()" style="width:90px" />
+  <span class="scroller-val" id="y-min-val">0</span>
+  
+  <span class="scroller-lbl" style="color:var(--cyan-bright)">Y MAX</span>
+  <input type="range" id="y-max-sl" min="100" max="32767" value="32767" step="50" oninput="onYSlider()" style="width:90px" />
+  <span class="scroller-val" id="y-max-val">auto</span>
+  <button class="btn-sm" onclick="resetY()">AUTO Y</button>
+</div>
+
+<!-- Stats Indicators -->
+<div class="stats">
+  <div class="stat"><div class="stat-lbl">TOTAL SAMPLES</div><div class="stat-num b" id="s0">--</div></div>
+  <div class="stat"><div class="stat-lbl">LATEST TIMESTAMP / ID</div><div class="stat-num a" id="s1">--</div></div>
+  <div class="stat"><div class="stat-lbl">AVG ADC1 COUNT</div><div class="stat-num g" id="s3">--</div></div>
+  <div class="stat"><div class="stat-lbl">DARK BASELINE (ADC1)</div><div class="stat-num p" id="s5">--</div></div>
+  <div class="stat"><div class="stat-lbl">ENZYME DOSE (C / P / L)</div><div class="stat-num a" id="s-dose">--</div></div>
+  <div class="stat"><div class="stat-lbl">LAST UPDATED</div><div class="stat-num w" id="s6" style="font-size:16px;padding-top:4px">--</div></div>
+</div>
+
+<div class="spec-row" id="spec"></div>
+
+<!-- Main Dashboard Split Layout: Charts on Left (65%), Breakdown & LEDs on Right (35%) -->
+<div class="dashboard-split">
+  
+  <!-- Left Side: 2x2 Chart Grid -->
+  <div class="dashboard-charts-col">
+    <div class="chart-grid">
+      <!-- Chart 1: Raw ADC1 -->
+      <div class="panel">
+        <div class="ptitle"><span class="neon-dot cyan"></span>ADC1 Raw Wavelengths Over Time</div>
+        <div class="ch-box"><canvas id="c-main"></canvas></div>
+      </div>
+
+      <!-- Chart 2: Composition Predictions -->
+      <div class="panel">
+        <div class="ptitle"><span class="neon-dot green"></span>TFLite Composition Trend (%)</div>
+        <div class="ch-box"><canvas id="c-comp"></canvas></div>
+      </div>
+
+      <!-- Chart 3: Normalized ADC1 -->
+      <div class="panel">
+        <div class="ptitle"><span class="neon-dot purple"></span>Normalized ADC1 (Dark Baseline Δ)</div>
+        <div class="ch-box"><canvas id="c-norm"></canvas></div>
+      </div>
+
+      <!-- Chart 4: Enzyme Release -->
+      <div class="panel">
+        <div class="ptitle"><span class="neon-dot amber"></span>Enzyme Release Dispensed (mL)</div>
+        <div class="ch-box"><canvas id="c-dosing-bar"></canvas></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Right Side: Live Optical Breakdown Table & Live LED Status Cards -->
+  <div class="dashboard-sidebar-col">
+    
+    <!-- Table Panel -->
+    <div class="panel sidebar-table-panel">
+      <div class="ptitle"><span class="neon-dot cyan"></span>Latest Sample Optical Breakdown</div>
+      <table class="ltable">
+        <thead>
+          <tr><th>LED CHANNEL</th><th>ADC1</th><th>NORM%</th><th>Δ5AVG</th><th>ΔPREV</th></tr>
+        </thead>
+        <tbody id="ltbody"></tbody>
+      </table>
+    </div>
+
+    <!-- 8 Live LED Cards in 2-Column Grid -->
+    <div class="panel sidebar-leds-panel">
+      <div class="ptitle"><span class="neon-dot green"></span>Live Channel Sensors (ADC1)</div>
+      <div class="led-grid" id="lcells"></div>
+    </div>
+
+  </div>
+</div>
+
+<footer>
+  <div class="ftr">SPECTROMETER RIG · ADS1115 ADC · 7 LEDs: 1650 / 1300 / 950 / 740 / 574 / 365 / 260 nm</div>
+  <div class="ftr" id="ftr-r">LIVE AUTO-SYNC ACTIVE</div>
+</footer>
+
+<script type="module" src="/src/main.js"></script>
+</body>
+</html>
+
