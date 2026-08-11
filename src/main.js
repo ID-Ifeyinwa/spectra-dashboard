@@ -90,9 +90,16 @@ window.init = async function() {
   const AKEY = akeyInput.value.trim();
 
   if (!PID || !AKEY) {
-    showErr('Project ID and API Key are required.');
+    showErr('Please enter both Project ID and API Key, then click CONNECT.');
+    setS('wait', 'WAITING FOR KEYS');
     return;
   }
+
+  // Save to localStorage for convenience
+  try {
+    localStorage.setItem('spectra_pid', PID);
+    localStorage.setItem('spectra_akey', AKEY);
+  } catch (e) {}
 
   noErr();
   if (timer) clearInterval(timer);
@@ -102,6 +109,16 @@ window.init = async function() {
 
   try {
     if (!fbApp) {
+      fbApp = firebase.initializeApp({
+        apiKey: AKEY,
+        projectId: PID,
+        authDomain: `${PID}.firebaseapp.com`
+      });
+    } else {
+      // If re-initializing with different keys
+      try {
+        await fbApp.delete();
+      } catch (e) {}
       fbApp = firebase.initializeApp({
         apiKey: AKEY,
         projectId: PID,
@@ -742,6 +759,18 @@ function baseOpts() {
   };
 }
 
-// Trigger Connect on page load
-init();
+// Page Boot: Restore saved keys if available, else wait for user
+try {
+  const savedPid = localStorage.getItem('spectra_pid');
+  const savedAkey = localStorage.getItem('spectra_akey');
+  if (savedPid) document.getElementById('pid').value = savedPid;
+  if (savedAkey) document.getElementById('akey').value = savedAkey;
+  if (savedPid && savedAkey) {
+    init();
+  } else {
+    setS('wait', 'OFFLINE · ENTER KEYS');
+  }
+} catch (e) {
+  setS('wait', 'OFFLINE · ENTER KEYS');
+}
 
