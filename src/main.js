@@ -18,15 +18,15 @@ let yMin = null;
 let yMax = null;
 
 function formatDDMM_HHMMSS(date) {
-  const dd = String(date.getDate()).padStart(2, "0");
-  const mm = String(date.getMonth() + 1).padStart(2, "0");
-  const hh = String(date.getHours()).padStart(2, "0");
-  const mi = String(date.getMinutes()).padStart(2, "0");
-  const ss = String(date.getSeconds()).padStart(2, "0");
+  const dd = String(date.getUTCDate()).padStart(2, "0");
+  const mm = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const hh = String(date.getUTCHours()).padStart(2, "0");
+  const mi = String(date.getUTCMinutes()).padStart(2, "0");
+  const ss = String(date.getUTCSeconds()).padStart(2, "0");
   return `${dd}${mm}_${hh}${mi}${ss}`;
 }
 
-// Convert DDMM_HHMMSS or timestamp to HH:MM:SS format
+// Convert DDMM_HHMMSS or timestamp to HH:MM:SS format (UTC)
 function formatDocIdToTime(id) {
   if (!id) return "--:--:--";
   const parts = id.split("_");
@@ -43,11 +43,15 @@ function formatDocIdToTime(id) {
 let fbApp = null;
 let unsubscribeFirestore = null;
 
-// Live Clock update
+// Live Clock update (UTC)
 setInterval(() => {
   const clockEl = document.getElementById('clk');
   if (clockEl) {
-    clockEl.textContent = new Date().toLocaleTimeString('en-GB', { hour12: false });
+    const now = new Date();
+    const hh = String(now.getUTCHours()).padStart(2, '0');
+    const mm = String(now.getUTCMinutes()).padStart(2, '0');
+    const ss = String(now.getUTCSeconds()).padStart(2, '0');
+    clockEl.textContent = `${hh}:${mm}:${ss} UTC`;
   }
 }, 500);
 
@@ -292,7 +296,16 @@ function parseDocIdToDate(id) {
   const min = parseInt(timePart.substring(2, 4));
   const sec = parseInt(timePart.substring(4, 6));
   
-  return new Date(year, month, day, hour, min, sec);
+  // Construct explicitly in UTC timestamp
+  return new Date(Date.UTC(year, month, day, hour, min, sec));
+}
+
+function parseInputDateToUTC(val) {
+  if (!val) return null;
+  const [dPart, tPart] = val.split("T");
+  const [year, month, day] = dPart.split("-").map(Number);
+  const [hour, min] = tPart.split(":").map(Number);
+  return new Date(Date.UTC(year, month - 1, day, hour, min, 0));
 }
 
 function getFilteredDataset() {
@@ -302,18 +315,18 @@ function getFilteredDataset() {
   const endVal = document.getElementById("filter-end").value;
 
   if (startVal) {
-    const startDate = new Date(startVal);
+    const startDate = parseInputDateToUTC(startVal);
     dataset = dataset.filter(d => {
       const dDate = parseDocIdToDate(d.id);
-      return dDate && dDate >= startDate;
+      return dDate && dDate.getTime() >= startDate.getTime();
     });
   }
 
   if (endVal) {
-    const endDate = new Date(endVal);
+    const endDate = parseInputDateToUTC(endVal);
     dataset = dataset.filter(d => {
       const dDate = parseDocIdToDate(d.id);
-      return dDate && dDate <= endDate;
+      return dDate && dDate.getTime() <= endDate.getTime();
     });
   }
 
@@ -436,7 +449,7 @@ function formatDuration(sec) {
 }
 
 // ----------------------------------------------------------
-//  Dedicated Batch Recorder Logic (With Pre-Flight Warnings)
+//  Dedicated Batch Recorder Logic (With Pre-Flight Warnings & UTC)
 // ----------------------------------------------------------
 window.startBatch = async function () {
   const input = document.getElementById('batch-input');
@@ -483,13 +496,14 @@ window.startBatch = async function () {
 
   try {
     const db = firebase.firestore();
-    // Immediately write initial batch record to ensure permissions & connection work
+    // Immediately write initial batch record in UTC
     await db.collection('batch_runs').doc(docId).set({
       label: label,
       status: "IN_PROGRESS",
       startTime: firebase.firestore.Timestamp.fromDate(testStart),
       startTimestamp: formatDDMM_HHMMSS(testStart),
-      createdFrom: "web_dashboard"
+      createdFrom: "web_dashboard",
+      timezone: "UTC"
     });
 
     // Write Succeeded -> Start live recording!
@@ -500,13 +514,18 @@ window.startBatch = async function () {
     startBtn.disabled = true;
     endBtn.disabled = false;
 
+    const startH = String(batchStart.getUTCHours()).padStart(2, '0');
+    const startM = String(batchStart.getUTCMinutes()).padStart(2, '0');
+    const startS = String(batchStart.getUTCSeconds()).padStart(2, '0');
+    const startUTCStr = `${startH}:${startM}:${startS} UTC`;
+
     // Start live elapsed timer
     if (batchTimerInterval) clearInterval(batchTimerInterval);
     batchTimerInterval = setInterval(() => {
       if (!batchStart) return;
       const elapsedSec = Math.floor((new Date() - batchStart) / 1000);
       if (statusEl) {
-        statusEl.innerHTML = `<span style="color:var(--green-bright);font-weight:700">● RECORDING:</span> "${batchLabel}" (${batchStart.toLocaleTimeString()}) — <strong style="color:var(--cyan-bright);">${formatDuration(elapsedSec)}</strong>`;
+        statusEl.innerHTML = `<span style="color:var(--green-bright);font-weight:700">● RECORDING:</span> "${batchLabel}" (${startUTCStr}) — <strong style="color:var(--cyan-bright);">${formatDuration(elapsedSec)}</strong>`;
       }
     }, 1000);
 
@@ -550,7 +569,7 @@ window.endBatch = async function () {
 
   endBtn.disabled = true;
   endBtn.textContent = 'SAVING...';
-  if (statusEl) statusEl.innerHTML = `<span style="color:var(--amber-bright);font-weight:700">⌛ SAVING:</span> Finalizing batch in Firestore...`;
+  if (statusEl) statusEl.innerHTML = `<span style="color:var(--amber-bright);font-weight:700">⌛ SAVING:</span> Finalizing batch in Firestore (UTC)...`;
 
   const endTime = new Date();
   const docId = `${batchLabel.replace(/\s+/g, '_')}_${formatDDMM_HHMMSS(batchStart)}`;
@@ -566,12 +585,13 @@ window.endBatch = async function () {
       startTimestamp: formatDDMM_HHMMSS(batchStart),
       endTimestamp: formatDDMM_HHMMSS(endTime),
       durationSeconds: durationSec,
-      durationFormatted: formatDuration(durationSec)
+      durationFormatted: formatDuration(durationSec),
+      timezone: "UTC"
     }, { merge: true });
     
     document.getElementById('batch-input').value = '';
     if (statusEl) {
-      statusEl.innerHTML = `<span style="color:var(--cyan-bright);font-weight:700">✓ BATCH SAVED:</span> <strong>${docId}</strong> (${formatDuration(durationSec)})`;
+      statusEl.innerHTML = `<span style="color:var(--cyan-bright);font-weight:700">✓ BATCH SAVED (UTC):</span> <strong>${docId}</strong> (${formatDuration(durationSec)})`;
     }
     batchLabel = '';
     batchStart = null;
@@ -652,7 +672,7 @@ function processAndRender() {
   }
 
   const L = data[data.length - 1];
-  // Format X-axis with time (HH:MM:SS)
+  // Format X-axis with time (HH:MM:SS UTC)
   const lbs = data.map(s => s.timeStr);
   const mx = Math.max(1, ...data.flatMap(s => WLS.map(wl => s.leds[wl]?.a1 || 0)));
 
@@ -662,7 +682,12 @@ function processAndRender() {
   document.getElementById('s3').textContent = L.a1.toFixed(0);
   document.getElementById('s5').textContent = L.d1;
   document.getElementById('s-dose').textContent = `${L.dosing.carb.toFixed(1)} / ${L.dosing.prot.toFixed(1)} / ${L.dosing.lipid.toFixed(1)} mL`;
-  document.getElementById('s6').textContent = new Date().toLocaleTimeString('en-GB', { hour12: false });
+  
+  const now = new Date();
+  const uH = String(now.getUTCHours()).padStart(2, '0');
+  const uM = String(now.getUTCMinutes()).padStart(2, '0');
+  const uS = String(now.getUTCSeconds()).padStart(2, '0');
+  document.getElementById('s6').textContent = `${uH}:${uM}:${uS} UTC`;
 
   // Wavelength Spectrum bars opacity update
   WLS.forEach((wl, i) => {

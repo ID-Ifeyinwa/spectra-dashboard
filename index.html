@@ -56,10 +56,10 @@
   <span class="scroller-val" id="off-val">latest</span>
   <button class="btn-sm" onclick="snapLatest()">LATEST</button>
 
-  <!-- Date Range Filter -->
-  <span class="scroller-lbl" style="margin-left:20px; color:var(--purple-bright)">START TIME</span>
+  <!-- Date Range Filter (UTC) -->
+  <span class="scroller-lbl" style="margin-left:20px; color:var(--purple-bright)">START TIME (UTC)</span>
   <input type="datetime-local" id="filter-start" class="date-input" onchange="onTimeFilterChange()" />
-  <span class="scroller-lbl" style="color:var(--purple-bright)">END TIME</span>
+  <span class="scroller-lbl" style="color:var(--purple-bright)">END TIME (UTC)</span>
   <input type="datetime-local" id="filter-end" class="date-input" onchange="onTimeFilterChange()" />
   <button class="btn-sm" onclick="clearTimeFilter()">CLEAR TIME</button>
 
