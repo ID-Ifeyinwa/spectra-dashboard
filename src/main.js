@@ -414,63 +414,189 @@ window.resetY = function() {
 };
 
 // ----------------------------------------------------------
-//  Dedicated Batch Recorder Logic
+//  Batch‑run recorder state
 // ----------------------------------------------------------
-window.startBatch = function () {
+let batchLabel = "";
+let batchStart = null;
+let batchTimerInterval = null;
+let isConnected = false;
+
+// Online / Offline Global Network Monitoring
+window.addEventListener('offline', () => {
+  showErr('Network offline: Your internet connection was lost! Firebase syncing paused.');
+  setS('err', 'OFFLINE · NO INTERNET');
+});
+
+window.addEventListener('online', () => {
+  noErr();
+  setS('wait', 'RECONNECTED · SYNCING');
+  init();
+});
+
+// Helper: Format seconds to HH:MM:SS
+function formatDuration(sec) {
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+// ----------------------------------------------------------
+//  Dedicated Batch Recorder Logic (With Pre-Flight Warnings)
+// ----------------------------------------------------------
+window.startBatch = async function () {
   const input = document.getElementById('batch-input');
+  const startBtn = document.getElementById('batch-start');
+  const endBtn = document.getElementById('batch-end');
+  const statusEl = document.getElementById('batch-status-msg');
+
   const label = input.value.trim();
   if (!label) {
-    showErr('Please enter a batch/run name before starting.');
+    showErr('Please enter a batch/run name (e.g. Batch2323) before starting.');
+    input.focus();
     return;
   }
-  batchLabel = label;
-  batchStart = new Date();
-  document.getElementById('batch-start').disabled = true;
-  document.getElementById('batch-end').disabled = false;
-  
-  const statusEl = document.getElementById('batch-status-msg');
-  if (statusEl) {
-    statusEl.innerHTML = `<span style="color:var(--green-bright);font-weight:700">● RECORDING:</span> "${batchLabel}" (started ${batchStart.toLocaleTimeString()})`;
+
+  // 1. Pre-flight Check: Internet Connection
+  if (!navigator.onLine) {
+    showErr('CANNOT START BATCH: Your device is offline. Please check your internet connection.');
+    if (statusEl) {
+      statusEl.innerHTML = `<span style="color:var(--red-bright);font-weight:700">⚠ ERROR:</span> No internet connection.`;
+    }
+    return;
   }
-  setS('live', `BATCH "${batchLabel}" STARTED`);
-  noErr();
+
+  // 2. Pre-flight Check: Firebase Client Initialization
+  const pid = document.getElementById('pid')?.value.trim();
+  const akey = document.getElementById('akey')?.value.trim();
+  if (!pid || !akey) {
+    showErr('CANNOT START BATCH: Project ID or API Key is missing. Enter credentials and click CONNECT first.');
+    if (statusEl) {
+      statusEl.innerHTML = `<span style="color:var(--red-bright);font-weight:700">⚠ NOT CONNECTED:</span> Enter Project ID & API Key.`;
+    }
+    return;
+  }
+
+  // 3. Pre-flight Check: Live Firestore Write Verification
+  startBtn.disabled = true;
+  startBtn.textContent = 'CHECKING...';
+  if (statusEl) {
+    statusEl.innerHTML = `<span style="color:var(--amber-bright);font-weight:700">⌛ CONNECTING:</span> Verifying Firestore write permissions...`;
+  }
+
+  const testStart = new Date();
+  const docId = `${label.replace(/\s+/g, '_')}_${formatDDMM_HHMMSS(testStart)}`;
+
+  try {
+    const db = firebase.firestore();
+    // Immediately write initial batch record to ensure permissions & connection work
+    await db.collection('batch_runs').doc(docId).set({
+      label: label,
+      status: "IN_PROGRESS",
+      startTime: firebase.firestore.Timestamp.fromDate(testStart),
+      startTimestamp: formatDDMM_HHMMSS(testStart),
+      createdFrom: "web_dashboard"
+    });
+
+    // Write Succeeded -> Start live recording!
+    batchLabel = label;
+    batchStart = testStart;
+    
+    startBtn.textContent = 'RECORDING';
+    startBtn.disabled = true;
+    endBtn.disabled = false;
+
+    // Start live elapsed timer
+    if (batchTimerInterval) clearInterval(batchTimerInterval);
+    batchTimerInterval = setInterval(() => {
+      if (!batchStart) return;
+      const elapsedSec = Math.floor((new Date() - batchStart) / 1000);
+      if (statusEl) {
+        statusEl.innerHTML = `<span style="color:var(--green-bright);font-weight:700">● RECORDING:</span> "${batchLabel}" (${batchStart.toLocaleTimeString()}) — <strong style="color:var(--cyan-bright);">${formatDuration(elapsedSec)}</strong>`;
+      }
+    }, 1000);
+
+    setS('live', `BATCH "${batchLabel}" RECORDING`);
+    noErr();
+
+  } catch (e) {
+    // Write Failed -> Show immediate prominent warning so no work is wasted!
+    startBtn.disabled = false;
+    startBtn.textContent = 'START RECORDING';
+    endBtn.disabled = true;
+    batchLabel = "";
+    batchStart = null;
+
+    console.error("Batch start pre-flight failed:", e);
+    const errorMsg = `CANNOT START BATCH: Firestore Error (${e.message}). Ensure Firestore rules allow writes to 'batch_runs' and keys are valid.`;
+    showErr(errorMsg);
+    setS('err', 'FIREBASE WRITE ERROR');
+
+    if (statusEl) {
+      statusEl.innerHTML = `<span style="color:var(--red-bright);font-weight:700">⚠ WRITE FAILED:</span> ${e.message}`;
+    }
+  }
 };
 
 window.endBatch = async function () {
+  const startBtn = document.getElementById('batch-start');
+  const endBtn = document.getElementById('batch-end');
+  const statusEl = document.getElementById('batch-status-msg');
+
   if (!batchLabel || !batchStart) {
-    showErr('No batch has been started.');
+    showErr('No active batch is currently recording.');
     return;
   }
+
+  // Stop elapsed timer
+  if (batchTimerInterval) {
+    clearInterval(batchTimerInterval);
+    batchTimerInterval = null;
+  }
+
+  endBtn.disabled = true;
+  endBtn.textContent = 'SAVING...';
+  if (statusEl) statusEl.innerHTML = `<span style="color:var(--amber-bright);font-weight:700">⌛ SAVING:</span> Finalizing batch in Firestore...`;
+
   const endTime = new Date();
   const docId = `${batchLabel.replace(/\s+/g, '_')}_${formatDDMM_HHMMSS(batchStart)}`;
-  
-  const statusEl = document.getElementById('batch-status-msg');
-  if (statusEl) statusEl.textContent = "Saving batch to Firestore...";
+  const durationSec = Math.round((endTime - batchStart) / 1000);
 
   try {
     const db = firebase.firestore();
     await db.collection('batch_runs').doc(docId).set({
       label: batchLabel,
+      status: "COMPLETED",
       startTime: firebase.firestore.Timestamp.fromDate(batchStart),
       endTime: firebase.firestore.Timestamp.fromDate(endTime),
       startTimestamp: formatDDMM_HHMMSS(batchStart),
-      endTimestamp: formatDDMM_HHMMSS(endTime)
-    });
+      endTimestamp: formatDDMM_HHMMSS(endTime),
+      durationSeconds: durationSec,
+      durationFormatted: formatDuration(durationSec)
+    }, { merge: true });
     
     document.getElementById('batch-input').value = '';
     if (statusEl) {
-      statusEl.innerHTML = `<span style="color:var(--cyan-bright);font-weight:700">✓ SAVED:</span> ${docId}`;
+      statusEl.innerHTML = `<span style="color:var(--cyan-bright);font-weight:700">✓ BATCH SAVED:</span> <strong>${docId}</strong> (${formatDuration(durationSec)})`;
     }
     batchLabel = '';
     batchStart = null;
-    document.getElementById('batch-start').disabled = false;
-    document.getElementById('batch-end').disabled = true;
+    startBtn.disabled = false;
+    startBtn.textContent = 'START RECORDING';
+    endBtn.disabled = true;
+    endBtn.textContent = 'END & SAVE';
     setS('live', 'BATCH SAVED');
     noErr();
   } catch (e) {
-    setS('err', 'ERROR');
-    if (statusEl) statusEl.textContent = "Save failed: " + e.message;
-    showErr('Failed to write batch record: ' + e.message);
+    console.error("Batch end save error:", e);
+    setS('err', 'ERROR SAVING BATCH');
+    endBtn.disabled = false;
+    endBtn.textContent = 'RETRY END & SAVE';
+    
+    if (statusEl) {
+      statusEl.innerHTML = `<span style="color:var(--red-bright);font-weight:700">⚠ SAVE FAILED:</span> ${e.message} <button class="btn-sm" style="margin-left:6px;" onclick="endBatch()">RETRY</button>`;
+    }
+    showErr('Failed to finalize batch in Firestore: ' + e.message);
   }
 };
 
