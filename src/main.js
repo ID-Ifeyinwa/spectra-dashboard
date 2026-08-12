@@ -17,12 +17,6 @@ let offset = 0;
 let yMin = null;
 let yMax = null;
 
-// ----------------------------------------------------------
-//  Batch‑run recorder state
-// ----------------------------------------------------------
-let batchLabel = "";
-let batchStart = null;
-
 function formatDDMM_HHMMSS(date) {
   const dd = String(date.getDate()).padStart(2, "0");
   const mm = String(date.getMonth() + 1).padStart(2, "0");
